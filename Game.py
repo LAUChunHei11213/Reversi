@@ -98,14 +98,15 @@ class ReversiBoard(Tk.Canvas):
         print(sum(total))
 
     def refresh(self):
-
+        player_possible_position = rvs.possible_positions(self.board, 2)
         for i in range(rvs.BOARD_SIZE):
             for j in range(rvs.BOARD_SIZE):
                 x0 = i * self.cell_size + self.margin
                 y0 = j * self.cell_size + self.margin
-
-                if self.board[i][j] == 0:
-                    continue
+                if (i, j) in player_possible_position:
+                    bcolor = "#92a86d"
+                elif self.board[i][j] == 0:
+                    bcolor = "#808000"
                 if self.board[i][j] == rvs.PLAYER_NUM:
                     bcolor = "#000000"
                 if self.board[i][j] == rvs.COMPUTER_NUM:
