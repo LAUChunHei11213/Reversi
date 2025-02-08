@@ -3,8 +3,8 @@ import math
 import time
 
 BOARD_SIZE = 8
-PLAYER_NUM = 2
-COMPUTER_NUM = 1
+PLAYER1 = 2
+PLAYER2 = 1
 MAX_THINK_TIME = 60
 direction = [[0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1]]
 
@@ -19,11 +19,11 @@ def getInitialBoard():
         for j in range(0, BOARD_SIZE):
             board[i][j] = 0
 
-    board[BOARD_SIZE / 2 - 1][BOARD_SIZE / 2 - 1] = COMPUTER_NUM
-    board[BOARD_SIZE / 2][BOARD_SIZE / 2] = COMPUTER_NUM
+    board[BOARD_SIZE / 2 - 1][BOARD_SIZE / 2 - 1] = PLAYER2
+    board[BOARD_SIZE / 2][BOARD_SIZE / 2] = PLAYER2
 
-    board[BOARD_SIZE / 2 - 1][BOARD_SIZE / 2] = PLAYER_NUM
-    board[BOARD_SIZE / 2][BOARD_SIZE / 2 - 1] = PLAYER_NUM
+    board[BOARD_SIZE / 2 - 1][BOARD_SIZE / 2] = PLAYER1
+    board[BOARD_SIZE / 2][BOARD_SIZE / 2 - 1] = PLAYER1
 
     return board
 
@@ -40,13 +40,13 @@ def countTile(board, tile):
 
 
 # 返回一个颜色棋子可能的下棋位置
-def possible_positions(board, tile):
+def possible_positions(board, tile, mode):
     positions = []
     for i in range(0, BOARD_SIZE):
         for j in range(0, BOARD_SIZE):
             if board[i][j] != 0:
                 continue
-            if updateBoard(board, tile, i, j, checkonly=True) > 0:
+            if updateBoard(board, tile, i, j, mode, checkonly=True) > 0:
                 positions.append((i, j))
     return positions
 
@@ -55,16 +55,16 @@ def isOnBoard(x, y):
 
 
 # 是否是合法走法，如果合法返回需要翻转的棋子列表
-def updateBoard(board, tile, i, j, checkonly=False):
+def updateBoard(board, tile, i, j, mode, checkonly=False):
     # 该位置已经有棋子或者出界了，返回False
     reversed_stone = 0
 
     # 临时将tile 放到指定的位置
     board[i][j] = tile
-    if tile == 2:
-        change = 1
+    if tile == 1:
+        change = 1+mode #e.g.if mode is 1, change is 2
     else:
-        change = 2
+        change = 1
 
     # 要被翻转的棋子
     need_turn = []
@@ -108,7 +108,7 @@ def updateBoard(board, tile, i, j, checkonly=False):
 
 
 # 蒙特卡洛树搜索
-def mctsNextPosition(board):
+def mctsNextPosition(board, mode):
     def ucb1(node_tuple, t, cval):
         name, nplayout, reward, childrens = node_tuple
 
@@ -120,25 +120,25 @@ def mctsNextPosition(board):
 
         return (reward / nplayout) + cval * math.sqrt(2 * math.log(t) / nplayout)
 
-    def find_playout(tep_board, tile, depth=0):
+    def find_playout(tep_board, tile, depth=0, mode=1):
         def eval_board(tep_board):
-            player_tile = countTile(tep_board, PLAYER_NUM)
-            computer_tile = countTile(tep_board, COMPUTER_NUM)
+            player_tile = countTile(tep_board, PLAYER1)
+            computer_tile = countTile(tep_board, PLAYER2)
             if computer_tile > player_tile:
                 return True
             return False
         if depth > 32:
             return eval_board(tep_board)
-        turn_positions = possible_positions(tep_board, tile)
+        turn_positions = possible_positions(tep_board, tile, mode)
 
         # 查看是否可以在这个位置下棋
         if len(turn_positions) == 0:
-            if tile == COMPUTER_NUM:
-                neg_turn = PLAYER_NUM
+            if tile == PLAYER2:
+                neg_turn = PLAYER1
             else:
-                neg_turn = COMPUTER_NUM
+                neg_turn = PLAYER2
 
-            neg_turn_positions = possible_positions(tep_board, neg_turn)
+            neg_turn_positions = possible_positions(tep_board, neg_turn, mode)
 
             if len(neg_turn_positions) == 0:
                 return eval_board(tep_board)
@@ -148,18 +148,18 @@ def mctsNextPosition(board):
 
         # 随机放置一个棋子
         temp = turn_positions[random.randrange(0, len(turn_positions))]
-        updateBoard(tep_board, tile, temp[0], temp[1])
+        updateBoard(tep_board, tile, temp[0], temp[1], mode)
 
         # 转换轮次
-        if tile == COMPUTER_NUM:
-            tile = PLAYER_NUM
+        if tile == PLAYER2:
+            tile = PLAYER1
         else:
-            tile = COMPUTER_NUM
+            tile = PLAYER2
 
         return find_playout(tep_board, tile, depth=depth + 1)
 
-    def expand(tep_board, tile):
-        positions = possible_positions(tep_board, tile)
+    def expand(tep_board, tile, mode):
+        positions = possible_positions(tep_board, tile, mode)
         result = []
         for temp in positions:
             result.append((temp, 0, 0, []))
@@ -216,7 +216,7 @@ def mctsNextPosition(board):
 
         return current_path
 
-    root = expand(board, COMPUTER_NUM)
+    root = expand(board, PLAYER2, mode)
     current_board = getInitialBoard()
     current_board2 = getInitialBoard()
     start_time = time.time()
@@ -230,16 +230,16 @@ def mctsNextPosition(board):
         # current_path是一个放置棋子的位置列表，根据此列表进行后续操作
         current_path = find_path(root, loop)
 
-        tile = COMPUTER_NUM
+        tile = PLAYER2
         for temp in current_path:
-            updateBoard(current_board, tile, temp[0], temp[1])
-            if tile == COMPUTER_NUM:
-                tile = PLAYER_NUM
+            updateBoard(current_board, tile, temp[0], temp[1], mode)
+            if tile == PLAYER2:
+                tile = PLAYER1
             else:
-                tile = COMPUTER_NUM
+                tile = PLAYER2
 
         #复制棋盘，因为会在find_playout函数修改了棋盘
-        isWon = find_playout(current_board2, tile)
+        isWon = find_playout(current_board2, tile, mode)
 
         #自顶向下传递参数
         child = root
@@ -256,7 +256,7 @@ def mctsNextPosition(board):
                 if isWon:
                     reward += 1
                 if t_playout >= 5 and len(t_childrens) == 0:
-                    t_childrens = expand(current_board, tile)
+                    t_childrens = expand(current_board, tile, mode)
 
                 child[idx] = (parent, t_playout, reward, t_childrens)
 
