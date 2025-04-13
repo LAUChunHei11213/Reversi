@@ -1,275 +1,200 @@
+import csv
 import random
-import math
+import torch
+import torch.nn as nn
+from math import sqrt, log
+import Env
+import numpy as np
 import time
+MCTS_ITERATIONS = 100
 
-BOARD_SIZE = 8
-PLAYER1 = 2
-PLAYER2 = 1
-MAX_THINK_TIME = 60
-direction = [[0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1]]
-
-
-# 初始化棋盘数组
-def getInitialBoard():
-    board = {}
-
-    for i in range(0, BOARD_SIZE):
-        board[i] = {}
-
-        for j in range(0, BOARD_SIZE):
-            board[i][j] = 0
-
-    board[BOARD_SIZE / 2 - 1][BOARD_SIZE / 2 - 1] = PLAYER2
-    board[BOARD_SIZE / 2][BOARD_SIZE / 2] = PLAYER2
-
-    board[BOARD_SIZE / 2 - 1][BOARD_SIZE / 2] = PLAYER1
-    board[BOARD_SIZE / 2][BOARD_SIZE / 2 - 1] = PLAYER1
-
-    return board
-
-
-# 返回棋子数
-def countTile(board, tile):
-    stones = 0
-    for i in range(0, BOARD_SIZE):
-        for j in range(0, BOARD_SIZE):
-            if board[i][j] == tile:
-                stones += 1
-
-    return stones
-
-
-# 返回一个颜色棋子可能的下棋位置
-def possible_positions(board, tile, mode):
-    positions = []
-    for i in range(0, BOARD_SIZE):
-        for j in range(0, BOARD_SIZE):
-            if board[i][j] != 0:
-                continue
-            if updateBoard(board, tile, i, j, mode, checkonly=True) > 0:
-                positions.append((i, j))
-    return positions
-
-def isOnBoard(x, y):
-    return x >= 0 and x <= 7 and y >= 0 and y <= 7
-
-
-# 是否是合法走法，如果合法返回需要翻转的棋子列表
-def updateBoard(board, tile, i, j, mode, checkonly=False):
-    # 该位置已经有棋子或者出界了，返回False
-    reversed_stone = 0
-
-    # 临时将tile 放到指定的位置
-    board[i][j] = tile
-    if tile == 1:
-        change = 1+mode #e.g.if mode is 1, change is 2
-    else:
-        change = 1
-
-    # 要被翻转的棋子
-    need_turn = []
-    for xdirection, ydirection in direction:
-        x, y = i, j
-        x += xdirection
-        y += ydirection
-        if isOnBoard(x, y) and board[x][y] == change:
-            x += xdirection
-            y += ydirection
-            if not isOnBoard(x, y):
-                continue
-            # 一直走到出界或不是对方棋子的位置
-            while board[x][y] == change:
-                x += xdirection
-                y += ydirection
-                if not isOnBoard(x, y):
-                    break
-            # 出界了，则没有棋子要翻转
-            if not isOnBoard(x, y):
-                continue
-            # 是自己的棋子，中间的所有棋子都要翻转
-            if board[x][y] == tile:
-                while True:
-                    x -= xdirection
-                    y -= ydirection
-                    # 回到了起点则结束
-                    if x == i and y == j:
-                        break
-                    # 需要翻转的棋子
-                    need_turn.append([x, y])
-    # 将前面临时放上的棋子去掉，即还原棋盘
-    board[i][j] = 0  # restore the empty space
-    # 没有要被翻转的棋子，则走法非法。翻转棋的规则。
-    for x, y in need_turn:
-        if not (checkonly):
-            board[i][j] = tile
-            board[x][y] = tile  # 翻转棋子
-        reversed_stone += 1
-    return reversed_stone
-
-
-# 蒙特卡洛树搜索
-def mctsNextPosition(board, mode):
-    def ucb1(node_tuple, t, cval):
-        name, nplayout, reward, childrens = node_tuple
-
-        if nplayout == 0:
-            nplayout = 0.00000000001
-
-        if t == 0:
-            t = 1
-
-        return (reward / nplayout) + cval * math.sqrt(2 * math.log(t) / nplayout)
-
-    def find_playout(tep_board, tile, depth=0, mode=1):
-        def eval_board(tep_board):
-            player_tile = countTile(tep_board, PLAYER1)
-            computer_tile = countTile(tep_board, PLAYER2)
-            if computer_tile > player_tile:
-                return True
+def create_feature(board, current_player):
+    directions = [(-1,-1), (-1,0), (-1,1),
+                (0,-1),          (0,1),
+                (1,-1),  (1,0),  (1,1)]
+    def get_valid(board):
+        valid = np.zeros((8,8),dtype=np.float32)
+        for x in range(8):
+            for y in range(8):
+                if is_valid(board, x, y):
+                    valid[x][y] = 1
+        return valid
+    def is_valid(board, x, y):
+        if board[x][y] != 0:
             return False
-        if depth > 32:
-            return eval_board(tep_board)
-        turn_positions = possible_positions(tep_board, tile, mode)
+        for dx, dy in directions:
+            if check_direction(board, x, y, dx, dy):
+                return True
+        return False
 
-        # 查看是否可以在这个位置下棋
-        if len(turn_positions) == 0:
-            if tile == PLAYER2:
-                neg_turn = PLAYER1
+    def check_direction(board, x, y, dx, dy):
+        nx, ny = x + dx, y + dy
+        found_opponent = False
+        while 0 <= nx < 8 and 0 <= ny < 8:
+            if board[nx][ny] == -1:
+                found_opponent = True
+                nx += dx
+                ny += dy
+            elif board[nx][ny] == 1:
+                return found_opponent
             else:
-                neg_turn = PLAYER2
-
-            neg_turn_positions = possible_positions(tep_board, neg_turn, mode)
-
-            if len(neg_turn_positions) == 0:
-                return eval_board(tep_board)
-            else:
-                tile = neg_turn
-                turn_positions = neg_turn_positions
-
-        # 随机放置一个棋子
-        temp = turn_positions[random.randrange(0, len(turn_positions))]
-        updateBoard(tep_board, tile, temp[0], temp[1], mode)
-
-        # 转换轮次
-        if tile == PLAYER2:
-            tile = PLAYER1
-        else:
-            tile = PLAYER2
-
-        return find_playout(tep_board, tile, depth=depth + 1)
-
-    def expand(tep_board, tile, mode):
-        positions = possible_positions(tep_board, tile, mode)
-        result = []
-        for temp in positions:
-            result.append((temp, 0, 0, []))
-        return result
-
-    def find_path(root, total_playout):
-        current_path = []
-        child = root
-        parent_playout = total_playout
-        isMCTSTurn = True
-
-        while True:
-            if len(child) == 0:
                 break
-            maxidxlist = [0]
-            cidx = 0
-            if isMCTSTurn:
-                maxval = -1
+        return False
+    # 初始化特征数组
+    features = np.zeros((5, 8, 8), dtype=np.float32)
+    
+
+    # 基础特征
+    np_board = np.array(board)*current_player
+    features[0, :, :] = (np_board == 1).astype(np.float32)  # 我方位置
+    features[1, :, :] = (np_board == -1).astype(np.float32)  # 敌方位置
+    features[2, :, :] = (np_board == 0).astype(np.float32)   # 空白位置
+    
+    # 动态特征
+    features[3, :, :] = get_valid(np_board)  # 需要实现get_legal_moves
+
+    # 战略位置
+    features[4,:,0] = 1  # 上边缘
+    features[4,:,7] = 1 # 下边缘
+    features[4,0,:] = 1  # 左边缘
+    features[4,7,:] = 1 # 右边缘
+    return features
+
+class MCTSNode:
+    def __init__(self, env, parent=None, action_taken=None, prior_prob=1.0, vision = 1):
+        #self.env = copy.deepcopy(env)
+        self.env = env
+        self.parent = parent
+        self.action_taken = action_taken
+        self.vision = vision
+        self.children = []
+        self.visits = 0
+        self.value = 0.0
+        self.untried_actions = self.env.get_valid_moves()
+        self.prior_prob = prior_prob
+
+    def print_tree(self, depth=0):
+        # 根节点无动作，子节点显示动作坐标
+        action_str = f"Root" if depth == 0 else f"Action: {self.action_taken}"
+        value_avg = self.value / self.visits if self.visits != 0 else 0.0
+        node_info = (
+            f"{'  ' * depth}|-- {action_str}"
+            f"\tVisits: {self.visits}"
+            f"\tValue: {value_avg:.2f}"
+            f"\tPrior: {self.prior_prob:.2f}"
+        )
+        print(node_info)
+        for child in self.children:
+            child.print_tree(depth + 1)
+
+    def select_child(self):
+        best_score = -float('inf')
+        best_child = None
+        for child in self.children:
+            if self.prior_prob == -1:
+                ucb = child.value/child.visits + sqrt(2*np.log(self.visits)/child.visits)
             else:
-                maxval = 2
+                ucb = child.value / child.visits + 2 * child.prior_prob * sqrt(self.visits) / child.visits
+            if ucb > best_score:
+                best_score = ucb
+                best_child = child
+        return best_child
 
-            for n_tuple in child:
-                parent, t_playout, reward, t_childrens = n_tuple
-
-                #实现最大最小搜索，电脑选择最大值，玩家选择最小值
-                if isMCTSTurn:
-                    cval = ucb1(n_tuple, parent_playout, 0.1)
-
-                    if cval >= maxval:
-                        if cval == maxval:
-                            maxidxlist.append(cidx)
-                        else:
-                            maxidxlist = [cidx]
-                            maxval = cval
+class MCTSAgent:
+    def __init__(self, iterations=None, time_limit = 3, policy_model = None, value_model = None):
+        self.time_limit = time_limit
+        self.iterations = iterations    
+        self.policy_model = policy_model
+        self.value_model = value_model
+        self.data = []
+    def selection(self, node):
+        while node.untried_actions == [] and node.children:
+            node = node.select_child()   
+        return node 
+    def expansion(self, node):
+        if node.untried_actions and not node.env.is_game_over():
+                action = random.choice(node.untried_actions)
+                if self.policy_model == None:
+                    new_env = node.env.fast_copy()
+                    vision=new_env.current_player
+                    new_env.step(action)
+                    child = MCTSNode(new_env, parent=node, action_taken=action,prior_prob=-1,vision=vision)
                 else:
-                    cval = ucb1(n_tuple, parent_playout, -0.1)
+                    feature = create_feature(node.env.board, node.env.current_player)
+                    tensor_feature = torch.from_numpy(feature).to("cuda").unsqueeze(0)
+                    with torch.no_grad():
+                        logits = self.policy_model(tensor_feature)
+                        prior_prob = nn.functional.softmax(logits, dim=1)[0]
+                    new_env = node.env.fast_copy()
+                    vision = node.env.current_player
+                    new_env.step(action)
+                    child = MCTSNode(new_env, parent=node, action_taken=action, prior_prob=prior_prob[8*action[0]+action[1]].item(), vision=vision)
+                node.children.append(child)
+                node.untried_actions.remove(action)
+                node = child
+        return node
+    def backpropagation(self, node,result):
+        while node is not None:
+            node.visits += 1
+            node.value += result*node.vision
+            node = node.parent       
+    def simulation(self, node):
+        if self.value_model == None:
+                sim_env = node.env.fast_copy()
+                while not sim_env.is_game_over():
+                    actions = sim_env.get_valid_moves()
+                    if actions:
+                        action = random.choice(actions)
+                        sim_env.step(action)
+                    else:
+                        sim_env.current_player *= -1
+                result = sim_env.get_score()
+        else:
+            feature = create_feature(node.env.board, node.env.current_player)
+            tensor_feature = torch.from_numpy(feature).to("cuda").unsqueeze(0)
+            with torch.no_grad():
+                result = self.value_model(tensor_feature)*node.env.current_player
+        return result
+    def steps(self, root):
+        node = root
+        # Selection
+        node = self.selection(node)
+        # Expansion
+        node = self.expansion(node)
+        # Simulation
+        result = self.simulation(node)   
+        # Backpropagation    
+        self.backpropagation(node,result)
+    def search(self, env):
+        root_env = env.fast_copy()
+        root = MCTSNode(root_env)
+        start = time.time()
+        if self.iterations == None:
+            while time.time() - start < self.time_limit:
+                self.steps(root)
+        else:
+            for _ in range(self.iterations):
+                self.steps(root)
+        #********mcts的data，用於顯示棋面勝率************#
+        mcts_data = {}
+        if root.children:
+            for child in root.children:
+                key = child.action_taken
+                mcts_data[key] = (
+                    child.visits,
+                    child.value / child.visits if child.visits else 0,
+                    child.prior_prob
+                )
+        #**************************************************#
 
-                    if cval <= maxval:
-                        if cval == maxval:
-                            maxidxlist.append(cidx)
-                        else:
-                            maxidxlist = [cidx]
-                            maxval = cval
+        #root.print_tree()   #打印mcts
 
-                cidx += 1
+        best_child = max(root.children, key=lambda c: c.visits) if root.children else None #選擇最優子節點
+        #*************************************儲存data analysis的data*************************************#
+        if self.value_model != None:
+            best_child.value = best_child.value.item()
+        self.data.append([best_child.prior_prob, best_child.value, time.time()-start])
+        #*****************************************************************************#
 
-            # 随机进行下棋，扩展
-            maxidx = maxidxlist[random.randrange(0, len(maxidxlist))]
-            parent, t_playout, reward, t_childrens = child[maxidx]
-            current_path.append(parent)
-            parent_playout = t_playout
-            child = t_childrens
-            isMCTSTurn = not (isMCTSTurn)
+        return best_child.action_taken if best_child else None, mcts_data
 
-        return current_path
-
-    root = expand(board, PLAYER2, mode)
-    current_board = getInitialBoard()
-    current_board2 = getInitialBoard()
-    start_time = time.time()
-
-    for loop in range(0, 5000):
-
-        # 思考最大时间限制
-        if (time.time() - start_time) >= MAX_THINK_TIME:
-            break
-
-        # current_path是一个放置棋子的位置列表，根据此列表进行后续操作
-        current_path = find_path(root, loop)
-
-        tile = PLAYER2
-        for temp in current_path:
-            updateBoard(current_board, tile, temp[0], temp[1], mode)
-            if tile == PLAYER2:
-                tile = PLAYER1
-            else:
-                tile = PLAYER2
-
-        #复制棋盘，因为会在find_playout函数修改了棋盘
-        isWon = find_playout(current_board2, tile, mode)
-
-        #自顶向下传递参数
-        child = root
-        for temp in current_path:
-            idx = 0
-            for n_tuple in child:
-                parent, t_playout, reward, t_childrens = n_tuple
-                if temp[0] == parent[0] and temp[1] == parent[1]:
-                    break
-                idx += 1
-
-            if temp[0] == parent[0] and temp[1] == parent[1]:
-                t_playout += 1
-                if isWon:
-                    reward += 1
-                if t_playout >= 5 and len(t_childrens) == 0:
-                    t_childrens = expand(current_board, tile, mode)
-
-                child[idx] = (parent, t_playout, reward, t_childrens)
-
-            child = t_childrens
-
-    print("loop count: ", loop)
-    max_avg_reward = -1
-    mt_result = (0, 0)
-    for n_tuple in root:
-        parent, t_playout, reward, t_childrens = n_tuple
-
-        if (t_playout > 0) and (reward / t_playout > max_avg_reward):
-            mt_result = parent
-            max_avg_reward = reward / t_playout
-
-    return mt_result
